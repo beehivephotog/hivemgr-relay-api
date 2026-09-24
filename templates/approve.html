@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% if req %}{{ req.order_number }} — {% endif %}Order Approval</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:"Segoe UI",Arial,sans-serif;background:#f2f4f2;color:#222925;margin:0;padding:24px 16px}
+  .card{max-width:480px;margin:40px auto;background:white;border:1px solid #dfe5dd;border-radius:12px;padding:28px 26px;box-shadow:0 3px 12px #26332b0d}
+  h1{font-size:19px;margin:0 0 4px}
+  .shop{font-size:12px;letter-spacing:.5px;color:#74826f;text-transform:uppercase;margin-bottom:18px}
+  .order{font-size:13px;color:#4e5d47;margin-bottom:18px}
+  .summary{white-space:pre-wrap;background:#f6f8f4;border:1px solid #e4e9df;border-radius:8px;padding:14px 16px;font-size:13px;line-height:1.6;margin-bottom:22px}
+  .actions{display:flex;gap:10px;margin-top:6px}
+  button{flex:1;padding:13px 16px;border-radius:7px;border:1px solid transparent;font-weight:650;font-size:14px;cursor:pointer}
+  button.approve{background:#4e9e2f;color:white}
+  button.changes{background:white;border-color:#cdd6c8;color:#3a463a}
+  textarea{width:100%;border:1px solid #cad5c9;border-radius:6px;padding:10px 12px;font:inherit;font-size:13px;margin:14px 0;min-height:70px;resize:vertical}
+  label{font-size:12px;font-weight:600;display:block;margin-bottom:4px}
+  .notice{font-size:13px;line-height:1.6;color:#3a463a}
+  .notice.ok{color:#3b7a24}
+  .notice.warn{color:#9f4b26}
+  .error{color:#a53728;font-size:13px;margin-bottom:14px}
+  footer{text-align:center;font-size:11px;color:#98a191;margin-top:26px}
+</style>
+</head>
+<body>
+<div class="card">
+{% if state == "not_found" %}
+  <h1>Link not recognized</h1>
+  <p class="notice">This approval link doesn't match anything we have on file. If you followed a link from an email, please contact the shop directly — they can resend it.</p>
+
+{% elif state == "expired" %}
+  <div class="shop">{{ req.shop_name }}</div>
+  <h1>This link has expired</h1>
+  <p class="notice">Order {{ req.order_number }}'s approval link is no longer active. Please contact {{ req.shop_name }} directly to review and approve your order.</p>
+
+{% elif state == "responded" %}
+  <div class="shop">{{ req.shop_name }}</div>
+  <h1>Order {{ req.order_number }}</h1>
+  {% if req.response == "approved" %}
+    <p class="notice ok">You approved this order{% if req.responded_at %} on {{ req.responded_at.strftime('%B %d, %Y') }}{% endif %}. Thanks! The shop has been notified and your order is moving forward.</p>
+  {% else %}
+    <p class="notice warn">You requested changes to this order{% if req.responded_at %} on {{ req.responded_at.strftime('%B %d, %Y') }}{% endif %}. The shop has been notified and will follow up with you.</p>
+  {% endif %}
+  {% if req.response_comment %}
+    <div class="summary">{{ req.response_comment }}</div>
+  {% endif %}
+
+{% else %}
+  <div class="shop">{{ req.shop_name }}</div>
+  <h1>Please review your order</h1>
+  <div class="order">Order {{ req.order_number }} — {{ req.customer_name }}</div>
+  <div class="summary">{{ req.summary }}</div>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post">
+    <label for="comment">Notes or requested changes (optional)</label>
+    <textarea id="comment" name="comment" maxlength="4000" placeholder="Leave a note if you're requesting changes, or add anything the shop should know."></textarea>
+    <div class="actions">
+      <button type="submit" name="response" value="approved" class="approve">Approve</button>
+      <button type="submit" name="response" value="changes_requested" class="changes">Request Changes</button>
+    </div>
+  </form>
+{% endif %}
+</div>
+<footer>Sent by {{ req.shop_name if req else "your sign shop" }} via HiveMGR</footer>
+</body>
+</html>
