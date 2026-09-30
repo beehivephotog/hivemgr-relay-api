@@ -12,6 +12,9 @@
   .shop{font-size:12px;letter-spacing:.5px;color:#74826f;text-transform:uppercase;margin-bottom:18px}
   .order{font-size:13px;color:#4e5d47;margin-bottom:18px}
   .summary{white-space:pre-wrap;background:#f6f8f4;border:1px solid #e4e9df;border-radius:8px;padding:14px 16px;font-size:13px;line-height:1.6;margin-bottom:22px}
+  .artwork{margin-bottom:18px}
+  .artwork img{display:block;width:100%;border:1px solid #e4e9df;border-radius:8px}
+  .artwork a{display:inline-block;font-size:13px;color:#3a6a20;text-decoration:underline}
   .actions{display:flex;gap:10px;margin-top:6px}
   button{flex:1;padding:13px 16px;border-radius:7px;border:1px solid transparent;font-weight:650;font-size:14px;cursor:pointer}
   button.approve{background:#4e9e2f;color:white}
@@ -47,11 +50,29 @@
   {% if req.response_comment %}
     <div class="summary">{{ req.response_comment }}</div>
   {% endif %}
+  {% if req.has_artwork %}
+    <div class="artwork">
+      {% if req.artwork_is_image %}
+        <img src="/approve/{{ req.token }}/artwork" alt="Artwork for order {{ req.order_number }}">
+      {% else %}
+        <a href="/approve/{{ req.token }}/artwork" target="_blank" rel="noopener">View artwork file ({{ req.artwork_filename }})</a>
+      {% endif %}
+    </div>
+  {% endif %}
 
 {% else %}
   <div class="shop">{{ req.shop_name }}</div>
   <h1>Please review your order</h1>
   <div class="order">Order {{ req.order_number }} — {{ req.customer_name }}</div>
+  {% if req.has_artwork %}
+    <div class="artwork">
+      {% if req.artwork_is_image %}
+        <img src="/approve/{{ req.token }}/artwork" alt="Artwork for order {{ req.order_number }}">
+      {% else %}
+        <a href="/approve/{{ req.token }}/artwork" target="_blank" rel="noopener">View artwork file ({{ req.artwork_filename }})</a>
+      {% endif %}
+    </div>
+  {% endif %}
   <div class="summary">{{ req.summary }}</div>
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <form method="post">

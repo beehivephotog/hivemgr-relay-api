@@ -43,10 +43,22 @@ class ApprovalRequest:
     response_comment: str = ""
     delivered_to_shop_at: Optional[datetime] = None
     acked_by_shop_at: Optional[datetime] = None
+    # Metadata only -- never the bytes themselves, so a plain get/list stays cheap.
+    # The bytes are fetched separately, only when the artwork is actually served.
+    artwork_filename: Optional[str] = None
+    artwork_mime_type: Optional[str] = None
 
     @property
     def is_expired(self) -> bool:
         return self.status == "pending" and utcnow() > self.expires_at
+
+    @property
+    def has_artwork(self) -> bool:
+        return bool(self.artwork_filename)
+
+    @property
+    def artwork_is_image(self) -> bool:
+        return bool(self.artwork_mime_type) and self.artwork_mime_type.startswith("image/")
 
 
 class Store(ABC):
@@ -85,6 +97,19 @@ class Store(ABC):
     @abstractmethod
     def ack_approvals(self, shop_id: str, ids: list[str]) -> None: ...
 
+    @abstractmethod
+    def set_artwork(self, shop_id: str, request_id: str, filename: str, mime_type: str, content: bytes) -> bool:
+        """Attaches the proof file to an existing request, so the public approval page can
+        show it inline. Shop-scoped (only the owning shop may attach to its own request).
+        Returns False if the request doesn't exist or belongs to a different shop."""
+        ...
+
+    @abstractmethod
+    def get_artwork_by_token(self, token: str) -> Optional[tuple[bytes, str, str]]:
+        """Returns (content, mime_type, filename) for the public page to serve, or None if
+        no artwork was ever attached (or the token is unknown)."""
+        ...
+
 
 class InMemoryStore(Store):
     """Thread-safe in-process store used by the test suite. Same semantics as PostgresStore,
@@ -95,6 +120,7 @@ class InMemoryStore(Store):
         self._shops: dict[str, Shop] = {}
         self._approvals: dict[str, ApprovalRequest] = {}
         self._by_token: dict[str, str] = {}
+        self._artwork: dict[str, tuple[bytes, str, str]] = {}  # request_id -> (content, mime_type, filename)
         self._seq = 0
 
     def init_schema(self) -> None:
@@ -174,3 +200,18 @@ class InMemoryStore(Store):
                 req = self._approvals.get(rid)
                 if req and req.shop_id == shop_id:
                     req.acked_by_shop_at = now
+
+    def set_artwork(self, shop_id: str, request_id: str, filename: str, mime_type: str, content: bytes) -> bool:
+        with self._lock:
+            req = self._approvals.get(request_id)
+            if not req or req.shop_id != shop_id:
+                return False
+            req.artwork_filename = filename
+            req.artwork_mime_type = mime_type
+            self._artwork[request_id] = (content, mime_type, filename)
+            return True
+
+    def get_artwork_by_token(self, token: str) -> Optional[tuple[bytes, str, str]]:
+        with self._lock:
+            rid = self._by_token.get(token)
+            return self._artwork.get(rid) if rid else None

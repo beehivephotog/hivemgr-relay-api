@@ -43,7 +43,20 @@ CREATE TABLE IF NOT EXISTS approval_requests (
 CREATE INDEX IF NOT EXISTS idx_approval_shop_undelivered
     ON approval_requests(shop_id) WHERE status = 'responded' AND acked_by_shop_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_approval_token ON approval_requests(token);
+-- Additive (Postgres ADD COLUMN IF NOT EXISTS is idempotent, unlike SQLite -- no
+-- PRAGMA-check dance needed, matching the "no migration framework for v1" convention).
+-- artwork_bytes is deliberately excluded from every SELECT below except the one that
+-- actually serves the image, so a plain get/list of a request stays cheap.
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS artwork_bytes BYTEA;
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS artwork_mime_type TEXT;
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS artwork_filename TEXT;
 """
+
+# Every column except artwork_bytes -- used everywhere an ApprovalRequest is read back,
+# so the (potentially large) blob is never loaded except by get_artwork_by_token.
+_APPROVAL_COLUMNS = """id, token, shop_id, shop_name, shop_job_ref, customer_name, order_number, summary,
+    status, created_at, expires_at, responded_at, response, response_comment,
+    delivered_to_shop_at, acked_by_shop_at, artwork_filename, artwork_mime_type"""
 
 
 def _row_to_shop(row) -> Shop:
@@ -62,7 +75,9 @@ def _row_to_approval(row) -> ApprovalRequest:
                            expires_at=row["expires_at"], responded_at=row["responded_at"],
                            response=row["response"], response_comment=row["response_comment"] or "",
                            delivered_to_shop_at=row["delivered_to_shop_at"],
-                           acked_by_shop_at=row["acked_by_shop_at"])
+                           acked_by_shop_at=row["acked_by_shop_at"],
+                           artwork_filename=row.get("artwork_filename"),
+                           artwork_mime_type=row.get("artwork_mime_type"))
 
 
 class PostgresStore(Store):
@@ -110,39 +125,39 @@ class PostgresStore(Store):
         expires_at = utcnow() + timedelta(days=expires_in_days)
         with self._cursor(commit=True) as cur:
             cur.execute(
-                """INSERT INTO approval_requests
+                f"""INSERT INTO approval_requests
                    (id, token, shop_id, shop_name, shop_job_ref, customer_name, order_number, summary, expires_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_APPROVAL_COLUMNS}""",
                 (str(uuid.uuid4()), token, shop_id, shop_name, shop_job_ref, customer_name, order_number, summary, expires_at))
             return _row_to_approval(cur.fetchone())
 
     def get_approval_by_token(self, token: str) -> Optional[ApprovalRequest]:
         with self._cursor() as cur:
-            cur.execute("SELECT * FROM approval_requests WHERE token = %s", (token,))
+            cur.execute(f"SELECT {_APPROVAL_COLUMNS} FROM approval_requests WHERE token = %s", (token,))
             row = cur.fetchone()
             return _row_to_approval(row) if row else None
 
     def record_response(self, token: str, response: str, comment: str) -> Optional[ApprovalRequest]:
         with self._cursor(commit=True) as cur:
             cur.execute(
-                """UPDATE approval_requests SET status = 'responded', response = %s,
+                f"""UPDATE approval_requests SET status = 'responded', response = %s,
                        response_comment = %s, responded_at = now()
                    WHERE token = %s AND status = 'pending' AND expires_at > now()
-                   RETURNING *""",
+                   RETURNING {_APPROVAL_COLUMNS}""",
                 (response, comment, token))
             row = cur.fetchone()
             if row:
                 return _row_to_approval(row)
             # Already responded (or expired/unknown) -- return current state so the
             # caller can render the right read-only page instead of erroring.
-            cur.execute("SELECT * FROM approval_requests WHERE token = %s", (token,))
+            cur.execute(f"SELECT {_APPROVAL_COLUMNS} FROM approval_requests WHERE token = %s", (token,))
             row = cur.fetchone()
             return _row_to_approval(row) if row else None
 
     def get_undelivered_for_shop(self, shop_id: str) -> list[ApprovalRequest]:
         with self._cursor() as cur:
             cur.execute(
-                """SELECT * FROM approval_requests
+                f"""SELECT {_APPROVAL_COLUMNS} FROM approval_requests
                    WHERE shop_id = %s AND status = 'responded' AND acked_by_shop_at IS NULL
                    ORDER BY responded_at""", (shop_id,))
             return [_row_to_approval(r) for r in cur.fetchall()]
@@ -152,6 +167,24 @@ class PostgresStore(Store):
             return
         with self._cursor(commit=True) as cur:
             cur.execute("UPDATE approval_requests SET delivered_to_shop_at = now() WHERE id = ANY(%s)", (ids,))
+
+    def set_artwork(self, shop_id: str, request_id: str, filename: str, mime_type: str, content: bytes) -> bool:
+        with self._cursor(commit=True) as cur:
+            cur.execute(
+                """UPDATE approval_requests SET artwork_bytes = %s, artwork_mime_type = %s, artwork_filename = %s
+                   WHERE id = %s AND shop_id = %s RETURNING id""",
+                (psycopg2.Binary(content), mime_type, filename, request_id, shop_id))
+            return cur.fetchone() is not None
+
+    def get_artwork_by_token(self, token: str) -> Optional[tuple[bytes, str, str]]:
+        with self._cursor() as cur:
+            cur.execute(
+                """SELECT artwork_bytes, artwork_mime_type, artwork_filename FROM approval_requests
+                   WHERE token = %s AND artwork_bytes IS NOT NULL""", (token,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return bytes(row["artwork_bytes"]), row["artwork_mime_type"], row["artwork_filename"]
 
     def ack_approvals(self, shop_id: str, ids: list[str]) -> None:
         if not ids:

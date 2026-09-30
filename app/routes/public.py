@@ -1,10 +1,11 @@
 """The customer-facing approval page. No login, no account -- the token in the URL
-is the only credential. Deliberately shows nothing beyond order number, a customer-safe
-line-item summary, and the shop's name: no artwork file, no pricing, no internal notes."""
+is the only credential. Shows order number, a customer-safe line-item summary, the
+shop's name, and (if the shop sent one) the artwork proof itself -- no pricing, no
+internal notes, and nothing beyond what that one line item's request carries."""
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from app.deps import get_store
@@ -45,3 +46,15 @@ def submit_approval(token: str, request: Request, response: str = Form(...), com
         req = store.record_response(token, response, comment.strip()[:4000])
     return templates.TemplateResponse(
         request, "approve.html", {"req": req, "state": _view_state(req), "error": error})
+
+
+@router.get("/approve/{token}/artwork")
+def view_artwork(token: str, request: Request, store: Store = Depends(get_store)):
+    rate_limit_ip(request, max_requests=30)  # a page load plus the odd reload/retry, not form submissions
+    art = store.get_artwork_by_token(token)
+    if not art:
+        raise HTTPException(status_code=404, detail="No artwork on file for this link.")
+    content, mime_type, filename = art
+    safe_name = (filename or "artwork").replace("\r", "").replace("\n", "").replace('"', "'")
+    return Response(content=content, media_type=mime_type or "application/octet-stream",
+                    headers={"Content-Disposition": f'inline; filename="{safe_name}"'})

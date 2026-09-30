@@ -19,12 +19,18 @@ LAN-only design. So every shop-facing call is initiated by the shop (`POST /api/
 roughly every 5 minutes while it's running); this service only ever *responds*, it never
 calls out to a shop. Only the customer-facing `/approve/<token>` page is genuinely public.
 
-## What never leaves the shop
+## What the approval page shows
 
-The approval page shows an order number, the shop's name, and a customer-safe
-line-item summary — no artwork file, no pricing, no internal notes. The artwork preview
-the customer needs to judge is in the *email* they already received (HiveMGR embeds it
-there); this service only needs to carry the decision, not the file.
+An order number, the shop's name, a customer-safe line-item summary, and (since
+2026-09-29) the artwork proof itself — no pricing, no internal notes. Originally (v1)
+this page deliberately carried no artwork at all, on the assumption that the *email*
+already showed it; in practice the shop's approval email had its own bug where it sent
+the shop's branding logo instead of the actual proof file (fixed in the main app's
+v1.6.1), and even once fixed, a customer clicking through to this page shouldn't see a
+blank page with no way to judge what they're approving. So the shop now also uploads
+the artwork here (best-effort, via `POST /api/v1/approval-requests/{id}/artwork`,
+right after creating the request) purely so this page can show it too — the file
+itself still isn't required for the approve/reject decision to work.
 
 ## Sync protocol
 
@@ -52,6 +58,12 @@ A shop offline for weeks loses nothing; it just gets a bigger batch on its next 
 
 `POST /api/v1/approval-requests` — the shop calls this right before emailing the
 approval link to a customer. Returns `{id, token, approve_url}`.
+
+`POST /api/v1/approval-requests/{id}/artwork` (multipart, field name `file`) — optional,
+best-effort, called right after the above succeeds. Attaches the one proof file for this
+request so `/approve/{token}` can display it; if this call fails or is never made, the
+approval request and its email still work fine, just without the inline preview on this
+page. 20 MB cap, same as the main app's own upload limit.
 
 ## Schema
 
